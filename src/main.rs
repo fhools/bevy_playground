@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use bevy::utils::FloatOrd;
+
 use std::f32::consts::PI;
 
 pub const WIDTH: f32 = 1280.0;
@@ -13,6 +15,7 @@ pub const HEIGHT: f32 = 720.0;
 #[reflect(Component)]
 pub struct Tower {
     shooting_timer: Timer,
+    bullet_offset: Vec3,
 }
 
 
@@ -24,6 +27,12 @@ pub struct Lifetime {
     timer: Timer,
 }
 
+#[derive(Reflect, Component, Default)]
+#[reflect(Component)]
+pub struct Bullet {
+    dir: Vec3,
+    speed: f32,
+}
 // For: Target spawning
 
 #[derive(Reflect, Component, Default)]
@@ -76,6 +85,7 @@ fn main() {
         .add_systems(Update, bullet_despawn)
         .add_systems(Update, target_spawning)
         .add_systems(Update, target_move)
+        .add_systems(Update, bullets_move)
         .run();
 }
 
@@ -113,6 +123,7 @@ fn spawn_basic_scene(mut commands: Commands,
         ..default()
     })
     .insert(Tower {
+        bullet_offset: Vec3::new(0.0, 0.0, -0.5),
         shooting_timer: Timer::from_seconds(SHOOTING_FREQ, TimerMode::Repeating)
     })
     .insert(Name::new("Tower"));
@@ -142,21 +153,20 @@ fn target_spawning(mut commands: Commands,
                    mut meshes: ResMut<Assets<Mesh>>,
                    mut materials: ResMut<Assets<StandardMaterial>>,
                    time: Res<Time>) {
-    // TODO: this seems weird making a loop when we know the query should return just one
-    // entity
-    for mut t in &mut target_spawner {
-        t.timer.tick(time.delta());
-        if t.timer.just_finished() {
-            commands.spawn(PbrBundle {
-                mesh: meshes.add(Mesh::from(shape::UVSphere {  radius: 0.2, ..default()})),
-                material: materials.add(Color::rgb(1.0, 0.0, 0.0).into()),
-                transform: Transform::from_xyz(-2.5, 0.5, 2.0),
-                ..default()
-            })
-            .insert(Health { health: 10.0 })
+
+    // Since we know the query will return just one entity we can use single_mut()
+    let mut ts = target_spawner.single_mut();
+    ts.timer.tick(time.delta());
+    if ts.timer.just_finished() {
+        commands.spawn(PbrBundle {
+            mesh: meshes.add(Mesh::from(shape::UVSphere {  radius: 0.2, ..default()})),
+            material: materials.add(Color::rgb(1.0, 0.0, 0.0).into()),
+            transform: Transform::from_xyz(-2.5, 0.5, 2.0),
+            ..default()
+        })
+        .insert(Health { health: 10.0 })
             .insert(Target { speed: 0.7 })
             .insert(Name::new("Target"));
-        }
     }
 
 }
@@ -169,27 +179,46 @@ fn target_move(mut targets: Query<(&Target, &mut Transform)>,
 }
 // System that shoots bullets from the tower
 fn tower_shooting(mut commands: Commands,
-                  mut towers: Query<&mut Tower>,
+                  mut towers: Query<(Entity, &mut Tower, &GlobalTransform)>,
+                  targets: Query<&GlobalTransform, With<Target>>,
                   bullet_assets: Res<GameAssets>,
                   time: Res<Time>) {
 
     // iterate through all Towers and increment timer and
     // then spawn a bullet 
-    for mut tower in &mut towers {
+    for (tower_entity, mut tower, transform) in &mut towers {
         tower.shooting_timer.tick(time.delta());
 
         if tower.shooting_timer.just_finished() {
-            let  spawn_transform = Transform::from_xyz(0.0, 0.7, 0.6)
-                .with_rotation(Quat::from_rotation_y(-PI / 2.0));
-
-            commands
-                .spawn(SceneBundle {
-                    scene: bullet_assets.bullet_scene.clone(),
-                    transform: spawn_transform,
-                    ..default()
+            let bullet_spawn = transform.translation() + tower.bullet_offset;
+            let direction = targets
+                .iter()
+                .min_by_key(|target_transform| {
+                    FloatOrd(Vec3::distance(target_transform.translation(), bullet_spawn))
                 })
-            .insert(Lifetime { timer: Timer::from_seconds(BULLET_LIFETIME, TimerMode::Once) })
-            .insert(Name::new("Bullet"));
+            .map(|closest_target| closest_target.translation() - bullet_spawn);
+
+            if let Some(direction) = direction {
+                let  spawn_transform = Transform::from_xyz(0.0, 0.7, 0.6)
+                    .with_rotation(Quat::from_rotation_y(-PI / 2.0));
+
+                commands.entity(tower_entity).with_children(|commands| {
+                    commands
+                        .spawn(SceneBundle {
+                            scene: bullet_assets.bullet_scene.clone(),
+                            transform: spawn_transform,
+                            ..default()
+                        })
+                    .insert(Lifetime { 
+                        timer: Timer::from_seconds(BULLET_LIFETIME, TimerMode::Once) 
+                    })
+                    .insert(Bullet {
+                        dir: direction,
+                        speed: 2.5
+                    })
+                    .insert(Name::new("Bullet"));
+                });
+            }
         }
     }
 }
@@ -215,6 +244,11 @@ fn bullet_despawn(mut commands: Commands,
     }
 }
 
+fn bullets_move(mut bullets: Query<(&Bullet, &mut Transform)>, time: Res<Time>) {
+    for (bullet, mut transform) in &mut bullets {
+        transform.translation += bullet.dir.normalize() * bullet.speed * time.delta_seconds();
+    }
+}
 
 // Startup system to load assets
 fn asset_loading(mut commands: Commands,
