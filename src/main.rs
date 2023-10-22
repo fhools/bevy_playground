@@ -6,12 +6,17 @@ pub const WIDTH: f32 = 1280.0;
 pub const HEIGHT: f32 = 720.0;
 
 // Components
+
+
+// for: Tower
 #[derive(Reflect, Component, Default)]
 #[reflect(Component)]
 pub struct Tower {
     shooting_timer: Timer,
 }
 
+
+// For: Bullets, 
 #[derive(Reflect, Component, Default)]
 #[reflect(Component)] // Not sure what this does? I forgot to put it and it still worked in world
                       // inspector
@@ -19,6 +24,30 @@ pub struct Lifetime {
     timer: Timer,
 }
 
+// For: Target spawning
+
+#[derive(Reflect, Component, Default)]
+#[reflect(Component)]
+pub struct TargetSpawnTimer {
+    timer: Timer,
+}
+
+
+// For: Targets
+
+#[derive(Reflect, Component, Default)]
+#[reflect(Component)]
+pub struct Health {
+    health: f32,
+}
+
+
+#[derive(Reflect, Component, Default)]
+#[reflect(Component)]
+pub struct Target {
+    speed: f32,
+}
+// Resources
 #[derive(Resource)]
 pub struct GameAssets {
     bullet_scene: Handle<Scene>,
@@ -45,9 +74,13 @@ fn main() {
         .add_systems(Startup, asset_loading)
         .add_systems(Update, tower_shooting)
         .add_systems(Update, bullet_despawn)
+        .add_systems(Update, target_spawning)
+        .add_systems(Update, target_move)
         .run();
 }
 
+
+// Startup system to place camera 
 fn spawn_camera(mut commands: Commands) {
     commands.spawn(Camera3dBundle {
         transform: Transform::from_xyz(-2.0, 2.5, 5.0)
@@ -56,6 +89,8 @@ fn spawn_camera(mut commands: Commands) {
     });
 }
 
+
+// Startup system to load level
 fn spawn_basic_scene(mut commands: Commands,
                      mut meshes: ResMut<Assets<Mesh>>,
                      mut materials: ResMut<Assets<StandardMaterial>>) {
@@ -94,8 +129,45 @@ fn spawn_basic_scene(mut commands: Commands,
     })
     .insert(Name::new("Light"));
 
+    // Target Spawning Entity
+    // using the anonymous tuple of components
+    commands.spawn((TargetSpawnTimer { timer: Timer::from_seconds(5.0, TimerMode::Repeating) },))
+        .insert(Name::new("Target Spawning Entity"));
 }
 
+
+// System that spawns the targets base on a timer
+fn target_spawning(mut commands: Commands,
+                   mut target_spawner: Query<&mut TargetSpawnTimer>,
+                   mut meshes: ResMut<Assets<Mesh>>,
+                   mut materials: ResMut<Assets<StandardMaterial>>,
+                   time: Res<Time>) {
+    // TODO: this seems weird making a loop when we know the query should return just one
+    // entity
+    for mut t in &mut target_spawner {
+        t.timer.tick(time.delta());
+        if t.timer.just_finished() {
+            commands.spawn(PbrBundle {
+                mesh: meshes.add(Mesh::from(shape::UVSphere {  radius: 0.2, ..default()})),
+                material: materials.add(Color::rgb(1.0, 0.0, 0.0).into()),
+                transform: Transform::from_xyz(-2.5, 0.5, 2.0),
+                ..default()
+            })
+            .insert(Health { health: 10.0 })
+            .insert(Target { speed: 0.7 })
+            .insert(Name::new("Target"));
+        }
+    }
+
+}
+
+fn target_move(mut targets: Query<(&Target, &mut Transform)>,
+               time: Res<Time>) {
+    for (target, mut transform) in &mut targets {
+        transform.translation.x += target.speed * time.delta_seconds();
+    }
+}
+// System that shoots bullets from the tower
 fn tower_shooting(mut commands: Commands,
                   mut towers: Query<&mut Tower>,
                   bullet_assets: Res<GameAssets>,
@@ -122,6 +194,8 @@ fn tower_shooting(mut commands: Commands,
     }
 }
 
+
+// System to destroy bullets after lifetime expire
 fn bullet_despawn(mut commands: Commands,
                   mut bullets: Query<(Entity, &mut Lifetime)>,
                   time: Res<Time>,) {
@@ -141,6 +215,8 @@ fn bullet_despawn(mut commands: Commands,
     }
 }
 
+
+// Startup system to load assets
 fn asset_loading(mut commands: Commands,
               assets: Res<AssetServer>) {
     commands.insert_resource(GameAssets {
